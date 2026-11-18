@@ -43,7 +43,7 @@ jobs:
             -p:SolutionDir="$GITHUB_WORKSPACE/Src/" \
             -p:IncludeAndroidTargets=true \
             -p:EmbedAssembliesIntoApk=true \
-            -p:AndroidEnableAssemblyCompression=false \
+            -p:UseMonoRuntime=true \
             -p:AndroidSdkDirectory="$ANDROID_HOME" \
             -p:JavaSdkDirectory="$JAVA_HOME" \
             "-p:NoWarn=XA0141%3BXA4301" \
