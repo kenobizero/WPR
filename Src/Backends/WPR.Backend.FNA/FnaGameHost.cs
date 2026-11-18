@@ -95,7 +95,7 @@ namespace WPR.Backend.FNA
             // referencing FNA. Registered here — before the game constructs its GraphicsDevice —
             // and the per-launch hooks are cleared in finally (a backend registry must not outlive
             // the run; ADR Risk #1).
-            XnaBackend.SetGraphics(new FnaGraphicsBackend());
+            XnaBackend.SetGraphics(new ScalingGraphicsBackend(new FnaGraphicsBackend()));
             // Spine relocation step 1: Game and GraphicsDeviceManager reach the window and the
             // event pump through this instead of naming FNAPlatform. Registered FIRST — Game's
             // ctor calls CreateWindow, so an unset slot here is a launch failure, not a late one.
