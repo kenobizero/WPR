@@ -16,16 +16,25 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
       - name: Install Android workload
-        run: dotnet workload install android
+        run: |
+          dotnet --version
+          dotnet workload clean
+          # --skip-manifest-update: pakai manifest bawaan SDK 10 supaya versi pack
+          # Android (SDK vs runtime) sama, bukan ditarik ke versi 11/37 yang beda.
+          dotnet workload install android --skip-manifest-update
+          dotnet workload list
 
       - name: Install Android SDK platform 36
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-36"
 
       - name: Build APK
         run: |
@@ -37,6 +46,7 @@ jobs:
             -p:AndroidEnableAssemblyCompression=false \
             -p:AndroidSdkDirectory="$ANDROID_HOME" \
             -p:JavaSdkDirectory="$JAVA_HOME" \
+            "-p:NoWarn=XA0141%3BXA4301" \
             -t:SignAndroidPackage
 
       - name: List generated APKs
@@ -46,5 +56,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wpr-apk
-          path: Src/Platforms/WPR.Platform.Android/bin/**/*.apk
+          path: Src/Platforms/WPR.Platform.Android/bin/**/*-Signed.apk
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
