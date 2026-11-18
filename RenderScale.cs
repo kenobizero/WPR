@@ -1,0 +1,41 @@
+using System;
+using System.Globalization;
+
+namespace WPR.Engine.Graphics
+{
+    /// <summary>Supersampling factor for the game backbuffer. 1.0 = off.</summary>
+    public static class RenderScale
+    {
+        /// <summary>Set to 1.0f to switch the feature off.</summary>
+        public const float DefaultFactor = 1.5f;
+        public const float MinFactor = 1.0f;
+        public const float MaxFactor = 4.0f;
+
+        private static float _factor = Initial();
+
+        public static float Factor
+        {
+            get { return _factor; }
+            set { _factor = Clamp(value); }
+        }
+
+        private static float Initial()
+        {
+            string env = Environment.GetEnvironmentVariable("WPR_RENDER_SCALE");
+            float parsed;
+            if (!string.IsNullOrWhiteSpace(env)
+                && float.TryParse(env.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out parsed))
+            {
+                return Clamp(parsed);
+            }
+            return Clamp(DefaultFactor);
+        }
+
+        private static float Clamp(float value)
+        {
+            if (float.IsNaN(value) || value < MinFactor) return MinFactor;
+            if (value > MaxFactor) return MaxFactor;
+            return value;
+        }
+    }
+}
