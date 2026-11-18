@@ -1,22 +1,32 @@
-name: Android APK (manual)
+name: Build Android APK
+
 on:
   workflow_dispatch:
+  push:
+    branches: [ "**" ]
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: 10.0.x
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: 21
+
       - name: Install Android workload
         run: dotnet workload install android
+
       - name: Install Android SDK platform 36
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
+
       - name: Build APK
         run: |
           dotnet build Src/Platforms/WPR.Platform.Android/WPR.Platform.Android.csproj \
@@ -28,7 +38,13 @@ jobs:
             -p:AndroidSdkDirectory="$ANDROID_HOME" \
             -p:JavaSdkDirectory="$JAVA_HOME" \
             -t:SignAndroidPackage
-      - uses: actions/upload-artifact@v4
+
+      - name: List generated APKs
+        run: find Src/Platforms/WPR.Platform.Android/bin -name "*.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: wpr-apk
-          path: Src/Platforms/WPR.Platform.Android/bin/**/*-Signed.apk￼Enter
+          path: Src/Platforms/WPR.Platform.Android/bin/**/*.apk
+          if-no-files-found: error
