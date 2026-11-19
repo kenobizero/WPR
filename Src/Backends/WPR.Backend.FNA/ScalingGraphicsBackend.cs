@@ -47,6 +47,10 @@ namespace WPR.Backend.FNA
         [ThreadStatic] private static int _pendingDepthHeight;
         [ThreadStatic] private static float _pendingDepthScale;
 
+        // Same hand-over for MSAA: RenderTarget2D asks GetMaxMultiSampleCount right after creating its
+        // texture, on the same thread. The sample count wanted for that target waits here until then.
+        [ThreadStatic] private static int _pendingMsaa;
+
         public ScalingGraphicsBackend(IGraphicsBackend inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
@@ -66,10 +70,47 @@ namespace WPR.Backend.FNA
         }
 
 
+        /// <summary>
+        /// The factor that brings the game's backbuffer up to the display's native resolution (longest
+        /// sides compared, so orientation does not matter). 1 when the window size is unknown or the
+        /// game already renders at least that large.
+        /// </summary>
+        private float NativeScale(RhiPresentationParameters p, int gameLongest)
+        {
+            if (gameLongest <= 0 || p.deviceWindowHandle == IntPtr.Zero)
+            {
+                return 1f;
+            }
+            try
+            {
+                _inner.GetDrawableSize(p.deviceWindowHandle, out int dw, out int dh);
+                int nativeLongest = Math.Max(dw, dh);
+                if (nativeLongest <= 0)
+                {
+                    return 1f;
+                }
+                float s = (float) nativeLongest / gameLongest;
+                WPR.Common.Log.Info(
+                    WPR.Common.LogCategory.AppList,
+                    $"[wpr-gfx] native render scale: screen {dw}x{dh}, game {p.backBufferWidth}x{p.backBufferHeight} -> {Math.Max(s, 1f):0.##}x"
+                );
+                return Math.Max(s, 1f);
+            }
+            catch (Exception ex)
+            {
+                WPR.Common.Log.Info(WPR.Common.LogCategory.AppList, "[wpr-gfx] native render scale unavailable: " + ex.Message);
+                return 1f;
+            }
+        }
+
         private RhiPresentationParameters ScaleBackbuffer(RhiPresentationParameters p)
         {
             float s = WPR.Engine.Graphics.RenderScale.Factor;
             int longest = Math.Max(p.backBufferWidth, p.backBufferHeight);
+            if (WPR.Engine.Graphics.RenderScale.UseNative)
+            {
+                s = NativeScale(p, longest);
+            }
             _gameBackLong = longest;
             _gameBackShort = Math.Min(p.backBufferWidth, p.backBufferHeight);
             if (longest > 0 && longest * s > MaxScaledDimension)
@@ -262,18 +303,35 @@ namespace WPR.Backend.FNA
         /// screen-sized targets are enlarged: the game's scene and post-process buffers. Shadow maps,
         /// lookup tables and the like (clearly larger or much smaller than the screen) keep their size.
         /// </summary>
+        private bool IsScreenSized(int width, int height)
+        {
+            if (_gameBackLong <= 0)
+            {
+                return false;
+            }
+            int longest = Math.Max(width, height);
+            int shortest = Math.Min(width, height);
+            return shortest * 2 >= _gameBackShort && longest <= _gameBackLong + _gameBackLong / 4;
+        }
+
+        /// <summary>
+        /// The MSAA sample count to ask for on a screen-sized render target, or 0 to leave the game's
+        /// own request alone. The backbuffer's MSAA never reaches a game that draws its scene into its
+        /// own render target, so the saved setting is applied to those targets here.
+        /// </summary>
+        private int RenderTargetMsaa(int width, int height)
+        {
+            int msaa = WPR.Engine.Graphics.GraphicsQuality.Msaa;
+            return msaa >= 2 && IsScreenSized(width, height) ? msaa : 0;
+        }
+
         private float RenderTargetScale(int width, int height)
         {
-            if (!WPR.Engine.Graphics.RenderScale.ScaleRenderTargets || _scale <= 1f || _gameBackLong <= 0)
+            if (!WPR.Engine.Graphics.RenderScale.ScaleRenderTargets || _scale <= 1f || !IsScreenSized(width, height))
             {
                 return 1f;
             }
             int longest = Math.Max(width, height);
-            int shortest = Math.Min(width, height);
-            if (shortest * 2 < _gameBackShort || longest > _gameBackLong + _gameBackLong / 4)
-            {
-                return 1f;
-            }
             float s = _scale;
             if (longest * s > MaxScaledDimension)
             {
@@ -378,11 +436,13 @@ namespace WPR.Backend.FNA
 
         public IntPtr CreateTexture2D(IntPtr device, SurfaceFormat format, int width, int height, int levelCount, byte isRenderTarget)
         {
+            _pendingMsaa = 0;
             if (isRenderTarget == 0)
             {
                 return _inner.CreateTexture2D(device, format, width, height, levelCount, isRenderTarget);
             }
 
+            _pendingMsaa = RenderTargetMsaa(width, height);
             float s = RenderTargetScale(width, height);
             if (s == 1f)
             {
@@ -545,8 +605,17 @@ namespace WPR.Backend.FNA
         public void GetMaxTextureSlots(IntPtr device, out int textures, out int vertexTextures) =>
             _inner.GetMaxTextureSlots(device, out textures, out vertexTextures);
 
-        public int GetMaxMultiSampleCount(IntPtr device, SurfaceFormat format, int preferredMultiSampleCount) =>
-            _inner.GetMaxMultiSampleCount(device, format, preferredMultiSampleCount);
+        public int GetMaxMultiSampleCount(IntPtr device, SurfaceFormat format, int preferredMultiSampleCount)
+        {
+            int wanted = _pendingMsaa;
+            _pendingMsaa = 0;
+            if (wanted > preferredMultiSampleCount)
+            {
+                preferredMultiSampleCount = wanted;
+                LogRenderTarget($"render target msaa {wanted}x requested");
+            }
+            return _inner.GetMaxMultiSampleCount(device, format, preferredMultiSampleCount);
+        }
 
         public void SetStringMarker(IntPtr device, string text) => _inner.SetStringMarker(device, text);
 

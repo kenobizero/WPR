@@ -27,6 +27,12 @@ namespace WPR.Engine.Graphics
         /// </summary>
         public static bool ScaleRenderTargets { get; set; } = EnvFlag("WPR_RENDER_SCALE_RT");
 
+        /// <summary>
+        /// When true, the backbuffer is rendered at the display's native resolution instead of a fixed
+        /// <see cref="Factor"/>: the backend works the factor out from the window's drawable size.
+        /// </summary>
+        public static bool UseNative { get; set; }
+
         private static bool EnvFlag(string name)
         {
             string env = Environment.GetEnvironmentVariable(name);

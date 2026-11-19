@@ -31,9 +31,11 @@ namespace WPR.Platform.Android
             if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_RENDER_SCALE")))
             {
                 float factor = Configuration.Current?.RenderScaleFactor ?? 1.0f;
-                WPR.Engine.Graphics.RenderScale.Factor = factor;
+                bool native = factor < 0f; // -1 = native screen resolution
+                WPR.Engine.Graphics.RenderScale.UseNative = native;
+                WPR.Engine.Graphics.RenderScale.Factor = native ? 1.0f : factor;
                 // A factor the player chose also enlarges the game's own screen-sized render targets.
-                WPR.Engine.Graphics.RenderScale.ScaleRenderTargets = factor > 1f;
+                WPR.Engine.Graphics.RenderScale.ScaleRenderTargets = native || factor > 1f;
             }
             if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_MSAA"))
                 && Configuration.Current?.MsaaSamples is { } msaa)

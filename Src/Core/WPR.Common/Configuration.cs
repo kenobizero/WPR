@@ -297,12 +297,13 @@ namespace WPR.Common
             set => _ConfPrivate!.GraphicsDriver = string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
         }
 
-        /// <summary>Supersampling factor for games (1.0 = off), or null for off. Next game launch.</summary>
+        /// <summary>Supersampling factor for games (1.0 = off), or null for off. -1 means "native": scale to
+        /// the phone's screen resolution. Next game launch.</summary>
         public float? RenderScaleFactor
         {
             get => _ConfPrivate!.RenderScaleFactor;
             set => _ConfPrivate!.RenderScaleFactor =
-                value is { } v && !float.IsNaN(v) && !float.IsInfinity(v) && v > 1f ? v : null;
+                value is { } v && !float.IsNaN(v) && !float.IsInfinity(v) && (v > 1f || v == -1f) ? v : null;
         }
 
         /// <summary>Backbuffer MSAA samples for games (2 or 4), or null for off. Next game launch.</summary>

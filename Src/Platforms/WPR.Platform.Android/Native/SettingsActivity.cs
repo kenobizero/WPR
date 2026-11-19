@@ -90,6 +90,7 @@ namespace WPR.Platform.Android.Native
             (1.0f, "off (fastest)"),
             (1.5f, "1.5x (smoother edges)"),
             (2.0f, "2.0x (smoothest, heavy)"),
+            (-1f, "native (your screen's resolution)"),
         };
 
         private void BuildSupersamplePicker()
@@ -98,7 +99,8 @@ namespace WPR.Platform.Android.Native
             WpTheme.ApplyTilt(button);
 
             float Current() => Configuration.Current?.RenderScaleFactor ?? 1.0f;
-            void Show() => button.Text = Current() > 1f ? $"antialiasing: {Current():0.##}x" : "antialiasing: off";
+            void Show() => button.Text = Current() < 0f ? "antialiasing: native"
+                : Current() > 1f ? $"antialiasing: {Current():0.##}x" : "antialiasing: off";
             Show();
 
             button.Click += async (_, _) =>
