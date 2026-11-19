@@ -30,7 +30,10 @@ namespace WPR.Platform.Android
             // Supersampling is off unless the player chose a factor (RenderScale's own default is 1.5).
             if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_RENDER_SCALE")))
             {
-                WPR.Engine.Graphics.RenderScale.Factor = Configuration.Current?.RenderScaleFactor ?? 1.0f;
+                float factor = Configuration.Current?.RenderScaleFactor ?? 1.0f;
+                WPR.Engine.Graphics.RenderScale.Factor = factor;
+                // A factor the player chose also enlarges the game's own screen-sized render targets.
+                WPR.Engine.Graphics.RenderScale.ScaleRenderTargets = factor > 1f;
             }
             if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_MSAA"))
                 && Configuration.Current?.MsaaSamples is { } msaa)

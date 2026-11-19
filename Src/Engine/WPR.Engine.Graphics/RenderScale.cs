@@ -19,6 +19,20 @@ namespace WPR.Engine.Graphics
             set { _factor = Clamp(value); }
         }
 
+        /// <summary>
+        /// When true, screen-sized render targets the game creates are enlarged by <see cref="Factor"/>
+        /// too, not just the backbuffer. Many games draw their 3D scene into their own render target,
+        /// which backbuffer scaling alone never touches. Off unless a head turns it on (the Android head
+        /// does when the player picks a factor) or WPR_RENDER_SCALE_RT is set to anything but 0.
+        /// </summary>
+        public static bool ScaleRenderTargets { get; set; } = EnvFlag("WPR_RENDER_SCALE_RT");
+
+        private static bool EnvFlag(string name)
+        {
+            string env = Environment.GetEnvironmentVariable(name);
+            return !string.IsNullOrWhiteSpace(env) && env.Trim() != "0";
+        }
+
         private static float Initial()
         {
             string env = Environment.GetEnvironmentVariable("WPR_RENDER_SCALE");

@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using WPR.Xna.Rhi;
@@ -9,14 +12,40 @@ namespace WPR.Backend.FNA
     /// <summary>
     /// Wraps the real graphics backend and renders the game's backbuffer at a larger size
     /// (supersampling). The game still sees its own backbuffer size.
+    ///
+    /// With <see cref="WPR.Engine.Graphics.RenderScale.ScaleRenderTargets"/> on, the screen-sized
+    /// render targets the game creates are enlarged by the same factor (see RenderTargetScale), so a
+    /// game that draws its scene into its own target is supersampled too.
     /// </summary>
     public sealed class ScalingGraphicsBackend : IGraphicsBackend
     {
         private const int MaxScaledDimension = 4096;
+        private const int MaxRenderTargetLogs = 24;
 
         private readonly IGraphicsBackend _inner;
         private float _scale = 1f;
-        private bool _backbufferBound = true;
+
+        // Factor applied to viewport and scissor for whatever is bound right now: the backbuffer's
+        // (_scale), an enlarged render target's, or 1 for any other target.
+        private float _boundScale = 1f;
+
+        // The game's own backbuffer size (before scaling), longest and shortest side. Render targets
+        // are judged against it.
+        private int _gameBackLong;
+        private int _gameBackShort;
+
+        // Render-target textures created enlarged: native handle -> factor. Entries go away when the
+        // texture is disposed, so a reused handle is never mistaken for one.
+        private readonly Dictionary<IntPtr, float> _scaledTextures = new Dictionary<IntPtr, float>();
+        private readonly object _scaledLock = new object();
+        private int _renderTargetLogs;
+
+        // A render target creates its texture, then (optionally) a colour renderbuffer, then a depth
+        // buffer, one after the other on one thread. The depth buffer call carries no texture, so the
+        // enlarged size of the texture just created is remembered here to match it.
+        [ThreadStatic] private static int _pendingDepthWidth;
+        [ThreadStatic] private static int _pendingDepthHeight;
+        [ThreadStatic] private static float _pendingDepthScale;
 
         public ScalingGraphicsBackend(IGraphicsBackend inner)
         {
@@ -41,6 +70,8 @@ namespace WPR.Backend.FNA
         {
             float s = WPR.Engine.Graphics.RenderScale.Factor;
             int longest = Math.Max(p.backBufferWidth, p.backBufferHeight);
+            _gameBackLong = longest;
+            _gameBackShort = Math.Min(p.backBufferWidth, p.backBufferHeight);
             if (longest > 0 && longest * s > MaxScaledDimension)
             {
                 s = (float) MaxScaledDimension / longest;
@@ -78,14 +109,14 @@ namespace WPR.Backend.FNA
         public IntPtr CreateDevice(ref RhiPresentationParameters presentationParameters, byte debugMode)
         {
             RhiPresentationParameters scaled = ScaleBackbuffer(presentationParameters);
-            _backbufferBound = true;
+            _boundScale = _scale;
             return _inner.CreateDevice(ref scaled, debugMode);
         }
 
         public void ResetBackbuffer(IntPtr device, ref RhiPresentationParameters presentationParameters)
         {
             RhiPresentationParameters scaled = ScaleBackbuffer(presentationParameters);
-            _backbufferBound = true;
+            _boundScale = _scale;
             _inner.ResetBackbuffer(device, ref scaled);
         }
 
@@ -93,7 +124,11 @@ namespace WPR.Backend.FNA
         {
             _inner.DestroyDevice(device);
             _scale = 1f;
-            _backbufferBound = true;
+            _boundScale = 1f;
+            lock (_scaledLock)
+            {
+                _scaledTextures.Clear();
+            }
         }
 
         public void GetBackbufferSize(IntPtr device, out int w, out int h)
@@ -108,11 +143,11 @@ namespace WPR.Backend.FNA
 
         public void SetViewport(IntPtr device, ref RhiViewport viewport)
         {
-            if (_scale != 1f && _backbufferBound)
+            if (_boundScale != 1f)
             {
                 RhiViewport v = viewport;
                 int vx = v.x, vy = v.y, vw = v.w, vh = v.h;
-                ScaleRect(ref vx, ref vy, ref vw, ref vh, _scale);
+                ScaleRect(ref vx, ref vy, ref vw, ref vh, _boundScale);
                 v.x = vx;
                 v.y = vy;
                 v.w = vw;
@@ -125,10 +160,10 @@ namespace WPR.Backend.FNA
 
         public void SetScissorRect(IntPtr device, ref Rectangle scissor)
         {
-            if (_scale != 1f && _backbufferBound)
+            if (_boundScale != 1f)
             {
                 int rx = scissor.X, ry = scissor.Y, rw = scissor.Width, rh = scissor.Height;
-                ScaleRect(ref rx, ref ry, ref rw, ref rh, _scale);
+                ScaleRect(ref rx, ref ry, ref rw, ref rh, _boundScale);
                 Rectangle r = new Rectangle(rx, ry, rw, rh);
                 _inner.SetScissorRect(device, ref r);
                 return;
@@ -138,8 +173,121 @@ namespace WPR.Backend.FNA
 
         public void SetRenderTargets(IntPtr device, IntPtr renderTargets, int numRenderTargets, IntPtr depthStencilBuffer, DepthFormat depthFormat, byte preserveDepthStencilContents)
         {
-            _backbufferBound = numRenderTargets <= 0;
-            _inner.SetRenderTargets(device, renderTargets, numRenderTargets, depthStencilBuffer, depthFormat, preserveDepthStencilContents);
+            if (numRenderTargets <= 0 || renderTargets == IntPtr.Zero)
+            {
+                _boundScale = _scale;
+                _inner.SetRenderTargets(device, renderTargets, numRenderTargets, depthStencilBuffer, depthFormat, preserveDepthStencilContents);
+                return;
+            }
+
+            int size = Marshal.SizeOf<RhiRenderTargetBinding>();
+            bool anyScaled = false;
+            float firstScale = 1f;
+            for (int i = 0; i < numRenderTargets; i++)
+            {
+                RhiRenderTargetBinding b = Marshal.PtrToStructure<RhiRenderTargetBinding>(IntPtr.Add(renderTargets, i * size));
+                if (b.type == 0 && TryGetTextureScale(b.texture, out float s))
+                {
+                    if (!anyScaled)
+                    {
+                        firstScale = s;
+                    }
+                    anyScaled = true;
+                }
+            }
+
+            if (!anyScaled)
+            {
+                _boundScale = 1f;
+                _inner.SetRenderTargets(device, renderTargets, numRenderTargets, depthStencilBuffer, depthFormat, preserveDepthStencilContents);
+                return;
+            }
+
+            // The driver sizes its work from the width/height in each binding, so hand it a copy with
+            // the enlarged texture's real size. The caller's array is left as the game sees it.
+            IntPtr copy = Marshal.AllocHGlobal(size * numRenderTargets);
+            try
+            {
+                for (int i = 0; i < numRenderTargets; i++)
+                {
+                    RhiRenderTargetBinding b = Marshal.PtrToStructure<RhiRenderTargetBinding>(IntPtr.Add(renderTargets, i * size));
+                    if (b.type == 0 && TryGetTextureScale(b.texture, out float s))
+                    {
+                        b.data1 = ScaleDimension(b.data1, s);
+                        b.data2 = ScaleDimension(b.data2, s);
+                    }
+                    Marshal.StructureToPtr(b, IntPtr.Add(copy, i * size), false);
+                }
+                _boundScale = firstScale;
+                _inner.SetRenderTargets(device, copy, numRenderTargets, depthStencilBuffer, depthFormat, preserveDepthStencilContents);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(copy);
+            }
+        }
+
+        public void ResolveTarget(IntPtr device, ref RhiRenderTargetBinding target)
+        {
+            if (target.type == 0 && TryGetTextureScale(target.texture, out float s))
+            {
+                RhiRenderTargetBinding scaled = target;
+                scaled.data1 = ScaleDimension(scaled.data1, s);
+                scaled.data2 = ScaleDimension(scaled.data2, s);
+                _inner.ResolveTarget(device, ref scaled);
+                return;
+            }
+            _inner.ResolveTarget(device, ref target);
+        }
+
+        // ---- Render target scaling ----
+
+        private static int ScaleDimension(int value, float s) => (int) Math.Round(value * s);
+
+        private bool TryGetTextureScale(IntPtr texture, out float s)
+        {
+            s = 1f;
+            if (texture == IntPtr.Zero)
+            {
+                return false;
+            }
+            lock (_scaledLock)
+            {
+                return _scaledTextures.TryGetValue(texture, out s);
+            }
+        }
+
+        /// <summary>
+        /// The factor a render target of this size is created with, or 1 to leave it alone. Only
+        /// screen-sized targets are enlarged: the game's scene and post-process buffers. Shadow maps,
+        /// lookup tables and the like (clearly larger or much smaller than the screen) keep their size.
+        /// </summary>
+        private float RenderTargetScale(int width, int height)
+        {
+            if (!WPR.Engine.Graphics.RenderScale.ScaleRenderTargets || _scale <= 1f || _gameBackLong <= 0)
+            {
+                return 1f;
+            }
+            int longest = Math.Max(width, height);
+            int shortest = Math.Min(width, height);
+            if (shortest * 2 < _gameBackShort || longest > _gameBackLong + _gameBackLong / 4)
+            {
+                return 1f;
+            }
+            float s = _scale;
+            if (longest * s > MaxScaledDimension)
+            {
+                s = (float) MaxScaledDimension / longest;
+            }
+            return s >= 1.05f ? s : 1f;
+        }
+
+        private void LogRenderTarget(string text)
+        {
+            if (Interlocked.Increment(ref _renderTargetLogs) <= MaxRenderTargetLogs)
+            {
+                WPR.Common.Log.Info(WPR.Common.LogCategory.AppList, "[wpr-gfx] " + text);
+            }
         }
 
         public void SwapBuffers(IntPtr device, Rectangle? sourceRectangle, Rectangle? destinationRectangle, IntPtr overrideWindowHandle)
@@ -219,8 +367,6 @@ namespace WPR.Backend.FNA
         public void ApplyVertexBufferBindings(IntPtr device, IntPtr bindings, int numBindings, byte bindingsUpdated, int baseVertex) =>
             _inner.ApplyVertexBufferBindings(device, bindings, numBindings, bindingsUpdated, baseVertex);
 
-        public void ResolveTarget(IntPtr device, ref RhiRenderTargetBinding target) => _inner.ResolveTarget(device, ref target);
-
         public void ReadBackbuffer(IntPtr device, int x, int y, int w, int h, IntPtr data, int dataLength) =>
             _inner.ReadBackbuffer(device, x, y, w, h, data, dataLength);
 
@@ -230,8 +376,40 @@ namespace WPR.Backend.FNA
 
         public int GetBackbufferMultiSampleCount(IntPtr device) => _inner.GetBackbufferMultiSampleCount(device);
 
-        public IntPtr CreateTexture2D(IntPtr device, SurfaceFormat format, int width, int height, int levelCount, byte isRenderTarget) =>
-            _inner.CreateTexture2D(device, format, width, height, levelCount, isRenderTarget);
+        public IntPtr CreateTexture2D(IntPtr device, SurfaceFormat format, int width, int height, int levelCount, byte isRenderTarget)
+        {
+            if (isRenderTarget == 0)
+            {
+                return _inner.CreateTexture2D(device, format, width, height, levelCount, isRenderTarget);
+            }
+
+            float s = RenderTargetScale(width, height);
+            if (s == 1f)
+            {
+                _pendingDepthScale = 1f;
+                return _inner.CreateTexture2D(device, format, width, height, levelCount, isRenderTarget);
+            }
+
+            int sw = ScaleDimension(width, s);
+            int sh = ScaleDimension(height, s);
+            IntPtr texture = _inner.CreateTexture2D(device, format, sw, sh, levelCount, isRenderTarget);
+            if (texture != IntPtr.Zero)
+            {
+                lock (_scaledLock)
+                {
+                    _scaledTextures[texture] = s;
+                }
+                _pendingDepthWidth = width;
+                _pendingDepthHeight = height;
+                _pendingDepthScale = s;
+                LogRenderTarget($"render target {width}x{height} enlarged to {sw}x{sh} ({s:0.##}x)");
+            }
+            else
+            {
+                _pendingDepthScale = 1f;
+            }
+            return texture;
+        }
 
         public IntPtr CreateTexture3D(IntPtr device, SurfaceFormat format, int width, int height, int depth, int levelCount) =>
             _inner.CreateTexture3D(device, format, width, height, depth, levelCount);
@@ -239,7 +417,17 @@ namespace WPR.Backend.FNA
         public IntPtr CreateTextureCube(IntPtr device, SurfaceFormat format, int size, int levelCount, byte isRenderTarget) =>
             _inner.CreateTextureCube(device, format, size, levelCount, isRenderTarget);
 
-        public void AddDisposeTexture(IntPtr device, IntPtr texture) => _inner.AddDisposeTexture(device, texture);
+        public void AddDisposeTexture(IntPtr device, IntPtr texture)
+        {
+            if (texture != IntPtr.Zero)
+            {
+                lock (_scaledLock)
+                {
+                    _scaledTextures.Remove(texture);
+                }
+            }
+            _inner.AddDisposeTexture(device, texture);
+        }
 
         public void SetTextureData2D(IntPtr device, IntPtr texture, int x, int y, int w, int h, int level, IntPtr data, int dataLength) =>
             _inner.SetTextureData2D(device, texture, x, y, w, h, level, data, dataLength);
@@ -262,11 +450,30 @@ namespace WPR.Backend.FNA
         public void GetTextureDataCube(IntPtr device, IntPtr texture, int x, int y, int w, int h, CubeMapFace cubeMapFace, int level, IntPtr data, int dataLength) =>
             _inner.GetTextureDataCube(device, texture, x, y, w, h, cubeMapFace, level, data, dataLength);
 
-        public IntPtr GenColorRenderbuffer(IntPtr device, int width, int height, SurfaceFormat format, int multiSampleCount, IntPtr texture) =>
-            _inner.GenColorRenderbuffer(device, width, height, format, multiSampleCount, texture);
+        public IntPtr GenColorRenderbuffer(IntPtr device, int width, int height, SurfaceFormat format, int multiSampleCount, IntPtr texture)
+        {
+            if (TryGetTextureScale(texture, out float s))
+            {
+                width = ScaleDimension(width, s);
+                height = ScaleDimension(height, s);
+            }
+            return _inner.GenColorRenderbuffer(device, width, height, format, multiSampleCount, texture);
+        }
 
-        public IntPtr GenDepthStencilRenderbuffer(IntPtr device, int width, int height, DepthFormat format, int multiSampleCount) =>
-            _inner.GenDepthStencilRenderbuffer(device, width, height, format, multiSampleCount);
+        public IntPtr GenDepthStencilRenderbuffer(IntPtr device, int width, int height, DepthFormat format, int multiSampleCount)
+        {
+            // The depth buffer is created right after its texture, on the same thread, at the game's
+            // size; if that texture was enlarged, the depth buffer must match it or the driver rejects
+            // the framebuffer as incomplete.
+            if (_pendingDepthScale > 1f && width == _pendingDepthWidth && height == _pendingDepthHeight)
+            {
+                float s = _pendingDepthScale;
+                _pendingDepthScale = 1f;
+                width = ScaleDimension(width, s);
+                height = ScaleDimension(height, s);
+            }
+            return _inner.GenDepthStencilRenderbuffer(device, width, height, format, multiSampleCount);
+        }
 
         public void AddDisposeRenderbuffer(IntPtr device, IntPtr renderbuffer) => _inner.AddDisposeRenderbuffer(device, renderbuffer);
 
