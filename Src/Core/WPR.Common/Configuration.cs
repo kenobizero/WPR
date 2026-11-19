@@ -71,6 +71,9 @@ namespace WPR.Common
             // WPR.Engine.Graphics; the head that consumes it maps the name onto GraphicsDriver.
             public string? GraphicsDriver;
 
+            // Supersampling factor for the game backbuffer (1.0 or null = off).
+            public float? RenderScaleFactor;
+
             // Backbuffer MSAA samples (2 or 4); null = off.
             public int? MsaaSamples;
 
@@ -292,6 +295,14 @@ namespace WPR.Common
         {
             get => _ConfPrivate!.GraphicsDriver;
             set => _ConfPrivate!.GraphicsDriver = string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
+        }
+
+        /// <summary>Supersampling factor for games (1.0 = off), or null for off. Next game launch.</summary>
+        public float? RenderScaleFactor
+        {
+            get => _ConfPrivate!.RenderScaleFactor;
+            set => _ConfPrivate!.RenderScaleFactor =
+                value is { } v && !float.IsNaN(v) && !float.IsInfinity(v) && v > 1f ? v : null;
         }
 
         /// <summary>Backbuffer MSAA samples for games (2 or 4), or null for off. Next game launch.</summary>

@@ -7,18 +7,23 @@ using WPR.Xna.Rhi;
 namespace WPR.Backend.FNA
 {
     /// <summary>
-    /// Wraps the real graphics backend to add image-quality options: backbuffer MSAA and
-    /// anisotropic texture filtering (see WPR.Engine.Graphics.GraphicsQuality). Everything else
-    /// is forwarded unchanged. (The class keeps its old name so existing references stay valid.)
+    /// Wraps the real graphics backend and renders the game's backbuffer at a larger size
+    /// (supersampling). The game still sees its own backbuffer size.
     /// </summary>
     public sealed class ScalingGraphicsBackend : IGraphicsBackend
     {
+        private const int MaxScaledDimension = 4096;
+
         private readonly IGraphicsBackend _inner;
+        private float _scale = 1f;
+        private bool _backbufferBound = true;
 
         public ScalingGraphicsBackend(IGraphicsBackend inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         }
+
+        // ---- Scaling helpers ----
 
         private static RhiPresentationParameters ApplyMsaa(RhiPresentationParameters p)
         {
@@ -31,48 +36,123 @@ namespace WPR.Backend.FNA
             return p;
         }
 
+
+        private RhiPresentationParameters ScaleBackbuffer(RhiPresentationParameters p)
+        {
+            float s = WPR.Engine.Graphics.RenderScale.Factor;
+            int longest = Math.Max(p.backBufferWidth, p.backBufferHeight);
+            if (longest > 0 && longest * s > MaxScaledDimension)
+            {
+                s = (float) MaxScaledDimension / longest;
+            }
+            if (s < 1f)
+            {
+                s = 1f;
+            }
+            _scale = s;
+            p = ApplyMsaa(p);
+            if (s != 1f)
+            {
+                p.backBufferWidth = (int) Math.Round(p.backBufferWidth * s);
+                p.backBufferHeight = (int) Math.Round(p.backBufferHeight * s);
+                WPR.Common.Log.Info(
+                    WPR.Common.LogCategory.AppList,
+                    $"[wpr-gfx] render scale {s:0.##}x: backbuffer {p.backBufferWidth}x{p.backBufferHeight}"
+                );
+            }
+            return p;
+        }
+
+        private static void ScaleRect(ref int x, ref int y, ref int w, ref int h, float s)
+        {
+            int x2 = (int) Math.Round((x + w) * s);
+            int y2 = (int) Math.Round((y + h) * s);
+            x = (int) Math.Round(x * s);
+            y = (int) Math.Round(y * s);
+            w = x2 - x;
+            h = y2 - y;
+        }
+
+        // ---- Members that change behaviour ----
+
         public IntPtr CreateDevice(ref RhiPresentationParameters presentationParameters, byte debugMode)
         {
-            RhiPresentationParameters p = ApplyMsaa(presentationParameters);
-            return _inner.CreateDevice(ref p, debugMode);
+            RhiPresentationParameters scaled = ScaleBackbuffer(presentationParameters);
+            _backbufferBound = true;
+            return _inner.CreateDevice(ref scaled, debugMode);
         }
 
         public void ResetBackbuffer(IntPtr device, ref RhiPresentationParameters presentationParameters)
         {
-            RhiPresentationParameters p = ApplyMsaa(presentationParameters);
-            _inner.ResetBackbuffer(device, ref p);
+            RhiPresentationParameters scaled = ScaleBackbuffer(presentationParameters);
+            _backbufferBound = true;
+            _inner.ResetBackbuffer(device, ref scaled);
         }
 
-        public void VerifySampler(IntPtr device, int index, IntPtr texture, ref RhiSamplerState sampler)
+        public void DestroyDevice(IntPtr device)
         {
-            int aniso = WPR.Engine.Graphics.GraphicsQuality.Anisotropy;
-            // Only smooth (Linear / Anisotropic) samplers are upgraded; Point stays Point so pixel-art HUDs keep their look.
-            if (aniso > 1 && (sampler.filter == TextureFilter.Linear || sampler.filter == TextureFilter.Anisotropic))
+            _inner.DestroyDevice(device);
+            _scale = 1f;
+            _backbufferBound = true;
+        }
+
+        public void GetBackbufferSize(IntPtr device, out int w, out int h)
+        {
+            _inner.GetBackbufferSize(device, out w, out h);
+            if (_scale != 1f)
             {
-                RhiSamplerState s = sampler;
-                s.filter = TextureFilter.Anisotropic;
-                if (s.maxAnisotropy < aniso) s.maxAnisotropy = aniso;
-                _inner.VerifySampler(device, index, texture, ref s);
+                w = (int) Math.Round(w / _scale);
+                h = (int) Math.Round(h / _scale);
+            }
+        }
+
+        public void SetViewport(IntPtr device, ref RhiViewport viewport)
+        {
+            if (_scale != 1f && _backbufferBound)
+            {
+                RhiViewport v = viewport;
+                int vx = v.x, vy = v.y, vw = v.w, vh = v.h;
+                ScaleRect(ref vx, ref vy, ref vw, ref vh, _scale);
+                v.x = vx;
+                v.y = vy;
+                v.w = vw;
+                v.h = vh;
+                _inner.SetViewport(device, ref v);
                 return;
             }
-            _inner.VerifySampler(device, index, texture, ref sampler);
+            _inner.SetViewport(device, ref viewport);
         }
 
-        // ---- Forwarded unchanged (these used to be scaled) ----
+        public void SetScissorRect(IntPtr device, ref Rectangle scissor)
+        {
+            if (_scale != 1f && _backbufferBound)
+            {
+                int rx = scissor.X, ry = scissor.Y, rw = scissor.Width, rh = scissor.Height;
+                ScaleRect(ref rx, ref ry, ref rw, ref rh, _scale);
+                Rectangle r = new Rectangle(rx, ry, rw, rh);
+                _inner.SetScissorRect(device, ref r);
+                return;
+            }
+            _inner.SetScissorRect(device, ref scissor);
+        }
 
-        public void DestroyDevice(IntPtr device) => _inner.DestroyDevice(device);
-
-        public void GetBackbufferSize(IntPtr device, out int w, out int h) => _inner.GetBackbufferSize(device, out w, out h);
-
-        public void SetViewport(IntPtr device, ref RhiViewport viewport) => _inner.SetViewport(device, ref viewport);
-
-        public void SetScissorRect(IntPtr device, ref Rectangle scissor) => _inner.SetScissorRect(device, ref scissor);
-
-        public void SetRenderTargets(IntPtr device, IntPtr renderTargets, int numRenderTargets, IntPtr depthStencilBuffer, DepthFormat depthFormat, byte preserveDepthStencilContents) =>
+        public void SetRenderTargets(IntPtr device, IntPtr renderTargets, int numRenderTargets, IntPtr depthStencilBuffer, DepthFormat depthFormat, byte preserveDepthStencilContents)
+        {
+            _backbufferBound = numRenderTargets <= 0;
             _inner.SetRenderTargets(device, renderTargets, numRenderTargets, depthStencilBuffer, depthFormat, preserveDepthStencilContents);
+        }
 
-        public void SwapBuffers(IntPtr device, Rectangle? sourceRectangle, Rectangle? destinationRectangle, IntPtr overrideWindowHandle) =>
+        public void SwapBuffers(IntPtr device, Rectangle? sourceRectangle, Rectangle? destinationRectangle, IntPtr overrideWindowHandle)
+        {
+            if (_scale != 1f && sourceRectangle.HasValue)
+            {
+                Rectangle src = sourceRectangle.Value;
+                int sx = src.X, sy = src.Y, sw = src.Width, sh = src.Height;
+                ScaleRect(ref sx, ref sy, ref sw, ref sh, _scale);
+                sourceRectangle = new Rectangle(sx, sy, sw, sh);
+            }
             _inner.SwapBuffers(device, sourceRectangle, destinationRectangle, overrideWindowHandle);
+        }
 
         // ---- Everything below is forwarded unchanged ----
 
@@ -118,6 +198,20 @@ namespace WPR.Backend.FNA
         public void ApplyRasterizerState(IntPtr device, ref RhiRasterizerState rasterizerState) =>
             _inner.ApplyRasterizerState(device, ref rasterizerState);
 
+        public void VerifySampler(IntPtr device, int index, IntPtr texture, ref RhiSamplerState sampler)
+        {
+            int aniso = WPR.Engine.Graphics.GraphicsQuality.Anisotropy;
+            // Only smooth (Linear / Anisotropic) samplers are upgraded; Point stays Point so pixel-art HUDs keep their look.
+            if (aniso > 1 && (sampler.filter == TextureFilter.Linear || sampler.filter == TextureFilter.Anisotropic))
+            {
+                RhiSamplerState s = sampler;
+                s.filter = TextureFilter.Anisotropic;
+                if (s.maxAnisotropy < aniso) s.maxAnisotropy = aniso;
+                _inner.VerifySampler(device, index, texture, ref s);
+                return;
+            }
+            _inner.VerifySampler(device, index, texture, ref sampler);
+        }
 
         public void VerifyVertexSampler(IntPtr device, int index, IntPtr texture, ref RhiSamplerState sampler) =>
             _inner.VerifyVertexSampler(device, index, texture, ref sampler);

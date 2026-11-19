@@ -27,6 +27,11 @@ namespace WPR.Platform.Android
         /// WPR_MSAA / WPR_ANISO, when set, keep priority.</summary>
         private static void ApplyGraphicsQuality()
         {
+            // Supersampling is off unless the player chose a factor (RenderScale's own default is 1.5).
+            if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_RENDER_SCALE")))
+            {
+                WPR.Engine.Graphics.RenderScale.Factor = Configuration.Current?.RenderScaleFactor ?? 1.0f;
+            }
             if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_MSAA"))
                 && Configuration.Current?.MsaaSamples is { } msaa)
             {

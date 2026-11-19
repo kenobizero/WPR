@@ -294,10 +294,27 @@
         android:text="leave this on vulkan. switch to opengl only if games show a black screen or fail to start on this device — some phones cannot run the vulkan path. takes effect the next time you launch a game." />
 
     <TextView
-        android:id="@+id/msaaButton"
+        android:id="@+id/renderScaleButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="18dp"
+        android:background="@color/wp_chrome"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:clickable="true"
+        android:focusable="true"
+        android:fontFamily="sans-serif"
+        android:textColor="@color/wp_foreground"
+        android:textSize="16sp"
+        android:text="antialiasing: off" />
+
+    <TextView
+        android:id="@+id/msaaButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
         android:background="@color/wp_chrome"
         android:paddingStart="18dp"
         android:paddingEnd="18dp"
@@ -336,7 +353,7 @@
         android:textColor="@color/wp_subtle"
         android:textSize="13sp"
         android:lineSpacingExtra="3dp"
-        android:text="msaa smooths jagged edges; anisotropic filtering keeps textures sharp at a slant (water, track). both cost speed and heat. takes effect the next time you launch a game." />
+        android:text="antialiasing renders the game larger and shrinks it back, which smooths 3D edges on every driver (costs speed and heat). msaa smooths edges on the screen buffer only and may do nothing in some games or glitch on vulkan; anisotropic filtering keeps textures sharp at a slant (water, track). both cost speed and heat. takes effect the next time you launch a game." />
 
 
     <TextView

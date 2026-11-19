@@ -85,8 +85,35 @@ namespace WPR.Platform.Android.Native
         };
 
         /// <summary>MSAA and anisotropic filtering: fixed choices, saved at once, read at the next game launch.</summary>
+        private static readonly (float Factor, string Label)[] SupersampleChoices =
+        {
+            (1.0f, "off (fastest)"),
+            (1.5f, "1.5x (smoother edges)"),
+            (2.0f, "2.0x (smoothest, heavy)"),
+        };
+
+        private void BuildSupersamplePicker()
+        {
+            TextView button = FindViewById<TextView>(Resource.Id.renderScaleButton)!;
+            WpTheme.ApplyTilt(button);
+
+            float Current() => Configuration.Current?.RenderScaleFactor ?? 1.0f;
+            void Show() => button.Text = Current() > 1f ? $"antialiasing: {Current():0.##}x" : "antialiasing: off";
+            Show();
+
+            button.Click += async (_, _) =>
+            {
+                int picked = await WpDialogs.ChooseAsync(this, "antialiasing (supersampling)", SupersampleChoices.Select(c => c.Label).ToArray());
+                if (picked < 0 || Configuration.Current == null) return;
+                Configuration.Current.RenderScaleFactor = SupersampleChoices[picked].Factor;
+                Configuration.Current.Save();
+                Show();
+            };
+        }
+
         private void BuildImageQualityPickers()
         {
+            BuildSupersamplePicker();
             BuildQualityPicker(Resource.Id.msaaButton, "msaa", "msaa", MsaaChoices,
                 () => Configuration.Current?.MsaaSamples,
                 v => { if (Configuration.Current != null) Configuration.Current.MsaaSamples = v; });
