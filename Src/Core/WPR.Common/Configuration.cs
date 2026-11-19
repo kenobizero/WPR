@@ -62,6 +62,9 @@ namespace WPR.Common
             // answer here. Null (absent) = windowed, which is what every existing config.json says.
             public bool? GameFullscreen;
 
+            // FXAA on the finished frame (a post-process pass at present time). Null (absent) = off.
+            public bool? Fxaa;
+
             // Which FNA3D graphics driver games are launched with, as the driver's own name
             // ("Vulkan" / "OpenGL"). Null = whatever the platform declares for itself, which is
             // what every existing config.json says and what the vast majority of devices should
@@ -284,6 +287,15 @@ namespace WPR.Common
         {
             get => _ConfPrivate!.GameFullscreen ?? false;
             set => _ConfPrivate!.GameFullscreen = value ? true : null;
+        }
+        /// <summary>
+        /// FXAA anti-aliasing on the finished frame, drawn when the frame is presented. Off by
+        /// default. Takes effect when a game starts.
+        /// </summary>
+        public bool Fxaa
+        {
+            get => _ConfPrivate!.Fxaa ?? false;
+            set => _ConfPrivate!.Fxaa = value ? true : null;
         }
         /// <summary>
         /// The FNA3D graphics driver to launch games with, by the driver's own name

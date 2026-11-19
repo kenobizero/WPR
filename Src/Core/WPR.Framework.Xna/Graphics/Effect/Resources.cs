@@ -102,10 +102,24 @@ namespace Microsoft.Xna.Framework.Graphics
 			}
 		}
 
+		/* This Effect is used by GraphicsDevice.Present for FXAA. */
+		public static byte[] FxaaEffect
+		{
+			get
+			{
+				if (fxaaEffect == null)
+				{
+					fxaaEffect = GetResource("FxaaEffect");
+				}
+				return fxaaEffect;
+			}
+		}
+
 		#endregion
 
 		#region Private Static Variables
 
+		private static byte[] fxaaEffect;
 		private static byte[] alphaTestEffect;
 		private static byte[] basicEffect;
 		private static byte[] dualTextureEffect;

@@ -481,6 +481,8 @@ namespace Microsoft.Xna.Framework.Graphics
 				PresentationParameters.MultiSampleCount
 			);
 
+			wprFxaa = WPR.Common.Configuration.Current?.Fxaa == true;
+
 			// Set up the FNA3D Device
 			try
 			{
@@ -882,6 +884,15 @@ namespace Microsoft.Xna.Framework.Graphics
 		private readonly RenderTargetBinding[] wprTurnBinding = new RenderTargetBinding[1];
 		private string wprTurnLogged;
 
+		/* WPR: FXAA. The same redirected backbuffer (wprTurnTarget) carries it: with fxaa on, the
+		 * game's backbuffer is a render target even when nothing is turned, and Present draws it
+		 * onto the host backbuffer through the FXAA effect instead of a plain (turned) copy.
+		 * Decided when the device is created, so a game never changes mode halfway through. */
+		private bool wprFxaa;
+		private Effect wprFxaaEffect;
+		private VertexBuffer wprFxaaQuad;
+		private IntPtr wprFxaaState;
+
 		// Saved around the turned copy: device state the game set and expects to find again.
 		private BlendState wprSavedBlend;
 		private DepthStencilState wprSavedDepth;
@@ -914,7 +925,7 @@ namespace Microsoft.Xna.Framework.Graphics
 			PresentationTurn.Active = wprTurn;
 			int w = PresentationParameters.BackBufferWidth;
 			int h = PresentationParameters.BackBufferHeight;
-			if (wprTurn == BackBufferTurn.None)
+			if (wprTurn == BackBufferTurn.None && !wprFxaa)
 			{
 				if (wprTurnTarget != null)
 				{
@@ -952,7 +963,9 @@ namespace Microsoft.Xna.Framework.Graphics
 				WprBindBackbuffer();
 			}
 
-			string line = $"[wpr-display] {w}x{h} backbuffer shown turned {wprTurn} on a {h}x{w} window";
+			string line = wprTurn == BackBufferTurn.None
+				? $"[wpr-display] {w}x{h} backbuffer drawn through FXAA"
+				: $"[wpr-display] {w}x{h} backbuffer shown turned {wprTurn} on a {h}x{w} window";
 			if (line != wprTurnLogged)
 			{
 				wprTurnLogged = line;
@@ -1043,6 +1056,13 @@ namespace Microsoft.Xna.Framework.Graphics
 			// the frame (AchievementToast) and what reads it back (FrameCapture) work in the space
 			// the player sees. The game's presentation parameters are never touched: another thread
 			// of the game may read them at any moment.
+			if (wprTurn == BackBufferTurn.None)
+			{
+				// Upright: only FXAA brought the redirect about.
+				WprDrawFxaa();
+				return true;
+			}
+
 			int portraitW = PresentationParameters.BackBufferWidth;
 			int portraitH = PresentationParameters.BackBufferHeight;
 
@@ -1066,6 +1086,43 @@ namespace Microsoft.Xna.Framework.Graphics
 			}
 			wprTurnBatch.End();
 			return true;
+		}
+
+		/// <summary>
+		/// Draws the game's backbuffer (the redirect target) onto the host backbuffer, one texel to
+		/// one pixel, through the FXAA effect. The effect has no parameters: it reads the texel size
+		/// off the screen-space derivative of the texture coordinate.
+		/// </summary>
+		private unsafe void WprDrawFxaa()
+		{
+			int w = PresentationParameters.BackBufferWidth;
+			int h = PresentationParameters.BackBufferHeight;
+			if (wprFxaaEffect == null)
+			{
+				wprFxaaEffect = new Effect(this, Resources.FxaaEffect);
+				wprFxaaQuad = new VertexBuffer(this, VertexPositionTexture.VertexDeclaration, 4, BufferUsage.WriteOnly);
+				wprFxaaQuad.SetData(new VertexPositionTexture[]
+				{
+					new VertexPositionTexture(new Vector3(-1f, -1f, 0f), new Vector2(0f, 1f)),
+					new VertexPositionTexture(new Vector3(1f, -1f, 0f), new Vector2(1f, 1f)),
+					new VertexPositionTexture(new Vector3(-1f, 1f, 0f), new Vector2(0f, 0f)),
+					new VertexPositionTexture(new Vector3(1f, 1f, 0f), new Vector2(1f, 0f)),
+				});
+				wprFxaaState = Marshal.AllocHGlobal(sizeof(Effect.MOJOSHADER_effectStateChanges));
+			}
+
+			Viewport = new Viewport(0, 0, w, h);
+			ScissorRectangle = new Rectangle(0, 0, w, h);
+			BlendState = BlendState.Opaque;
+			DepthStencilState = DepthStencilState.None;
+			RasterizerState = RasterizerState.CullNone;
+			Textures[0] = wprTurnTarget;
+			SamplerStates[0] = SamplerState.LinearClamp;
+			SetVertexBuffers(new VertexBufferBinding(wprFxaaQuad));
+
+			XnaBackend.Graphics.BeginPassRestore(GLDevice, wprFxaaEffect.glEffect, wprFxaaState);
+			DrawPrimitives(PrimitiveType.TriangleStrip, 0, 2);
+			XnaBackend.Graphics.EndPassRestore(GLDevice, wprFxaaEffect.glEffect);
 		}
 
 		/// <summary>
@@ -1172,7 +1229,9 @@ namespace Microsoft.Xna.Framework.Graphics
 			{
 				int w = PresentationParameters.BackBufferWidth;
 				int h = PresentationParameters.BackBufferHeight;
-				return wprPresentingTurned ? new Rectangle(0, 0, h, w) : new Rectangle(0, 0, w, h);
+				return wprPresentingTurned && wprTurn != BackBufferTurn.None
+					? new Rectangle(0, 0, h, w)
+					: new Rectangle(0, 0, w, h);
 			}
 		}
 

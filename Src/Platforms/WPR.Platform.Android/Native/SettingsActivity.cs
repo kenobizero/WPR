@@ -146,10 +146,29 @@ namespace WPR.Platform.Android.Native
             };
         }
 
+        /// <summary>FXAA on the finished frame: tap to switch on or off. Takes effect on the next game launch.</summary>
+        private void BuildFxaaToggle()
+        {
+            TextView button = FindViewById<TextView>(Resource.Id.fxaaButton)!;
+            WpTheme.ApplyTilt(button);
+
+            void Show() => button.Text = Configuration.Current?.Fxaa == true ? "fxaa: on" : "fxaa: off";
+            Show();
+
+            button.Click += (_, _) =>
+            {
+                if (Configuration.Current == null) return;
+                Configuration.Current.Fxaa = !Configuration.Current.Fxaa;
+                Configuration.Current.Save();
+                Show();
+            };
+        }
+
         private void BuildImageQualityPickers()
         {
             BuildSupersamplePicker();
             BuildTargetModePicker();
+            BuildFxaaToggle();
             BuildQualityPicker(Resource.Id.msaaButton, "msaa", "msaa", MsaaChoices,
                 () => Configuration.Current?.MsaaSamples,
                 v => { if (Configuration.Current != null) Configuration.Current.MsaaSamples = v; });
