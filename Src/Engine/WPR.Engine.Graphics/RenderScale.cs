@@ -33,6 +33,21 @@ namespace WPR.Engine.Graphics
         /// </summary>
         public static bool UseNative { get; set; }
 
+        /// <summary>
+        /// Which of a game's own render targets the supersampling reaches (see
+        /// <see cref="TargetsAll"/> and friends). A switch for isolating a driver-specific glitch.
+        /// </summary>
+        public static int TargetMode { get; set; }
+
+        /// <summary>Every screen-sized target is enlarged.</summary>
+        public const int TargetsAll = 0;
+        /// <summary>Only targets that are almost exactly screen-sized are enlarged.</summary>
+        public const int TargetsFullScreenOnly = 1;
+        /// <summary>Every screen-sized target is enlarged, but sampling it stays as the game asked.</summary>
+        public const int TargetsNoAnisotropy = 2;
+        /// <summary>No render target is enlarged; only the backbuffer is.</summary>
+        public const int TargetsNone = 3;
+
         private static bool EnvFlag(string name)
         {
             string env = Environment.GetEnvironmentVariable(name);

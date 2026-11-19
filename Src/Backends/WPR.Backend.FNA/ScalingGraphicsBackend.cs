@@ -325,9 +325,26 @@ namespace WPR.Backend.FNA
             return msaa >= 2 && IsScreenSized(width, height) ? msaa : 0;
         }
 
+        /// <summary>Within about 10% of the game's backbuffer on both sides.</summary>
+        private bool IsFullScreen(int width, int height)
+        {
+            if (_gameBackLong <= 0)
+            {
+                return false;
+            }
+            int longest = Math.Max(width, height);
+            int shortest = Math.Min(width, height);
+            return longest * 10 >= _gameBackLong * 9 && longest * 10 <= _gameBackLong * 11
+                && shortest * 10 >= _gameBackShort * 9 && shortest * 10 <= _gameBackShort * 11;
+        }
+
         private float RenderTargetScale(int width, int height)
         {
-            if (!WPR.Engine.Graphics.RenderScale.ScaleRenderTargets || _scale <= 1f || !IsScreenSized(width, height))
+            int mode = WPR.Engine.Graphics.RenderScale.TargetMode;
+            if (mode == WPR.Engine.Graphics.RenderScale.TargetsNone
+                || !WPR.Engine.Graphics.RenderScale.ScaleRenderTargets || _scale <= 1f
+                || !IsScreenSized(width, height)
+                || (mode == WPR.Engine.Graphics.RenderScale.TargetsFullScreenOnly && !IsFullScreen(width, height)))
             {
                 return 1f;
             }
@@ -408,7 +425,9 @@ namespace WPR.Backend.FNA
         {
             int aniso = WPR.Engine.Graphics.GraphicsQuality.Anisotropy;
             // Only smooth (Linear / Anisotropic) samplers are upgraded; Point stays Point so pixel-art HUDs keep their look.
-            if (aniso > 1 && (sampler.filter == TextureFilter.Linear || sampler.filter == TextureFilter.Anisotropic))
+            bool plainTarget = WPR.Engine.Graphics.RenderScale.TargetMode == WPR.Engine.Graphics.RenderScale.TargetsNoAnisotropy
+                && TryGetTextureScale(texture, out _);
+            if (aniso > 1 && !plainTarget && (sampler.filter == TextureFilter.Linear || sampler.filter == TextureFilter.Anisotropic))
             {
                 RhiSamplerState s = sampler;
                 s.filter = TextureFilter.Anisotropic;

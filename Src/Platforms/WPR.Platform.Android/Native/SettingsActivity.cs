@@ -113,9 +113,43 @@ namespace WPR.Platform.Android.Native
             };
         }
 
+        /// <summary>How supersampling reaches a game's own render targets. Mostly for isolating a glitch on one driver.</summary>
+        private static readonly (int? Value, string Label)[] TargetModeChoices =
+        {
+            (null, "all screen-sized targets (default)"),
+            (1, "full-screen targets only"),
+            (2, "all targets, plain texture filtering on them"),
+            (3, "none (backbuffer only)"),
+        };
+
+        private void BuildTargetModePicker()
+        {
+            TextView button = FindViewById<TextView>(Resource.Id.renderTargetModeButton)!;
+            WpTheme.ApplyTilt(button);
+
+            void Show() => button.Text = "game targets: " + (Configuration.Current?.RenderTargetMode switch
+            {
+                1 => "full-screen only",
+                2 => "no filtering boost",
+                3 => "none",
+                _ => "all",
+            });
+            Show();
+
+            button.Click += async (_, _) =>
+            {
+                int picked = await WpDialogs.ChooseAsync(this, "game render targets", TargetModeChoices.Select(c => c.Label).ToArray());
+                if (picked < 0 || Configuration.Current == null) return;
+                Configuration.Current.RenderTargetMode = TargetModeChoices[picked].Value;
+                Configuration.Current.Save();
+                Show();
+            };
+        }
+
         private void BuildImageQualityPickers()
         {
             BuildSupersamplePicker();
+            BuildTargetModePicker();
             BuildQualityPicker(Resource.Id.msaaButton, "msaa", "msaa", MsaaChoices,
                 () => Configuration.Current?.MsaaSamples,
                 v => { if (Configuration.Current != null) Configuration.Current.MsaaSamples = v; });

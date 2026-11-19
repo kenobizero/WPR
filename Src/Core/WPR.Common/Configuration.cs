@@ -77,6 +77,10 @@ namespace WPR.Common
             // Backbuffer MSAA samples (2 or 4); null = off.
             public int? MsaaSamples;
 
+            // How the supersampling reaches a game's own render targets (0 = all screen-sized ones,
+            // 1 = only full-screen ones, 2 = all, without anisotropy on them, 3 = none); null = 0.
+            public int? RenderTargetMode;
+
             // Anisotropic filtering level (2, 4, 8 or 16); null = off.
             public int? AnisotropyLevel;
 
@@ -307,6 +311,12 @@ namespace WPR.Common
         }
 
         /// <summary>Backbuffer MSAA samples for games (2 or 4), or null for off. Next game launch.</summary>
+        public int? RenderTargetMode
+        {
+            get => _ConfPrivate!.RenderTargetMode;
+            set => _ConfPrivate!.RenderTargetMode = value is >= 1 and <= 3 ? value : null;
+        }
+
         public int? MsaaSamples
         {
             get => _ConfPrivate!.MsaaSamples;

@@ -36,6 +36,7 @@ namespace WPR.Platform.Android
                 WPR.Engine.Graphics.RenderScale.Factor = native ? 1.0f : factor;
                 // A factor the player chose also enlarges the game's own screen-sized render targets.
                 WPR.Engine.Graphics.RenderScale.ScaleRenderTargets = native || factor > 1f;
+                WPR.Engine.Graphics.RenderScale.TargetMode = Configuration.Current?.RenderTargetMode ?? 0;
             }
             if (string.IsNullOrWhiteSpace(System.Environment.GetEnvironmentVariable("WPR_MSAA"))
                 && Configuration.Current?.MsaaSamples is { } msaa)
