@@ -17,7 +17,7 @@ namespace WPR.Backend.FNA
     /// render targets the game creates are enlarged by the same factor (see RenderTargetScale), so a
     /// game that draws its scene into its own target is supersampled too.
     /// </summary>
-    public sealed class ScalingGraphicsBackend : IGraphicsBackend
+    public sealed class ScalingGraphicsBackend : IGraphicsBackend, ITextureScaleSource
     {
         private const int MaxScaledDimension = 4096;
         private const int MaxRenderTargetLogs = 24;
@@ -337,6 +337,8 @@ namespace WPR.Backend.FNA
             return longest * 10 >= _gameBackLong * 9 && longest * 10 <= _gameBackLong * 11
                 && shortest * 10 >= _gameBackShort * 9 && shortest * 10 <= _gameBackShort * 11;
         }
+
+        public float TextureScale(int width, int height) => RenderTargetScale(width, height);
 
         private float RenderTargetScale(int width, int height)
         {

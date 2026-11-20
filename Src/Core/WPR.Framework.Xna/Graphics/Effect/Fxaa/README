@@ -3,8 +3,11 @@ when the player turns "fxaa" on in WPR's settings.
 
 FxaaEffect.fxb is YUVToRGBAEffect.fxb with its pixel shader swapped for the one in
 FxaaEffect.ps.asm (its vertex shader just passes position and texcoord through). It has no
-parameters of its own: the texel size comes from the screen-space derivative of the texture
-coordinate, so it expects a full-screen quad that maps the texture 1:1 onto the target.
+parameters of its own: the size of one texel rides in the quad's vertices (texcoord zw, see
+GraphicsDevice.WprFxaaVertex), because dsx/dsy need an extension on GLSL ES 1.00. make_fxb.py also
+patches two things MojoShader's assembler cannot express: the ps_3_0 texcoord0 input's usage (it
+writes 0, which links against POSITION0 and fails) and the vertex shader's texcoord write mask
+(.xy -> .xyzw, so zw reach the pixel shader).
 
 To rebuild after changing the assembly (MojoShader's assembler is in
 Src/Backends/FNA.Platform/lib/FNA3D/MojoShader):

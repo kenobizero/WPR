@@ -892,6 +892,21 @@ namespace Microsoft.Xna.Framework.Graphics
 		private Effect wprFxaaEffect;
 		private VertexBuffer wprFxaaQuad;
 		private IntPtr wprFxaaState;
+		private bool wprFxaaBroken;
+		private float wprFxaaTexelW, wprFxaaTexelH;
+
+		/// <summary>Quad vertex: clip-space position, uv in xy and the size of one texel in zw.</summary>
+		private struct WprFxaaVertex : IVertexType
+		{
+			public Vector3 Position;
+			public Vector4 TexCoord;
+			private static readonly VertexDeclaration Decl = new VertexDeclaration(
+				new VertexElement(0, VertexElementFormat.Vector3, VertexElementUsage.Position, 0),
+				new VertexElement(12, VertexElementFormat.Vector4, VertexElementUsage.TextureCoordinate, 0)
+			);
+			VertexDeclaration IVertexType.VertexDeclaration => Decl;
+			public static VertexDeclaration Declaration => Decl;
+		}
 
 		// Saved around the turned copy: device state the game set and expects to find again.
 		private BlendState wprSavedBlend;
@@ -1037,8 +1052,25 @@ namespace Microsoft.Xna.Framework.Graphics
 			DeviceThreadDispatch.DrainPosted();
 			DeviceThreadDispatch.Suspended = true;
 
-			ApplySamplers();
 			wprPresentingTurned = true;
+			try
+			{
+				ApplySamplers();
+				return WprBeginTurnedPresentCore();
+			}
+			catch
+			{
+				// Present's try/finally only starts once this returns: undo what it would have
+				// undone, or the frame stays "presenting" and every worker thread waits for ever.
+				wprPresentingTurned = false;
+				DeviceThreadDispatch.Suspended = false;
+				WprBindBackbuffer();
+				throw;
+			}
+		}
+
+		private bool WprBeginTurnedPresentCore()
+		{
 			WprBindBackbuffer();
 			XnaBackend.Graphics.ResolveTarget(GLDevice, ref wprTurnNativeBinding[0]);
 
@@ -1059,7 +1091,21 @@ namespace Microsoft.Xna.Framework.Graphics
 			if (wprTurn == BackBufferTurn.None)
 			{
 				// Upright: only FXAA brought the redirect about.
-				WprDrawFxaa();
+				if (!wprFxaaBroken)
+				{
+					try
+					{
+						WprDrawFxaa();
+						return true;
+					}
+					catch (Exception ex)
+					{
+						// Never leave the frame black: give FXAA up for this run and copy the frame plainly.
+						wprFxaaBroken = true;
+						XnaBackend.LogWarn("[wpr-display] FXAA failed, falling back to a plain copy: " + ex);
+					}
+				}
+				WprDrawPlainCopy();
 				return true;
 			}
 
@@ -1090,25 +1136,38 @@ namespace Microsoft.Xna.Framework.Graphics
 
 		/// <summary>
 		/// Draws the game's backbuffer (the redirect target) onto the host backbuffer, one texel to
-		/// one pixel, through the FXAA effect. The effect has no parameters: it reads the texel size
-		/// off the screen-space derivative of the texture coordinate.
+		/// one pixel, through the FXAA effect. The effect has no parameters: the size of one texel
+		/// rides along in the quad's vertices (texcoord zw).
 		/// </summary>
 		private unsafe void WprDrawFxaa()
 		{
 			int w = PresentationParameters.BackBufferWidth;
 			int h = PresentationParameters.BackBufferHeight;
+
+			// The texture behind the target may be enlarged by supersampling: step by ITS texel.
+			float scale = (XnaBackend.Graphics as WPR.Xna.Rhi.ITextureScaleSource)?.TextureScale(w, h) ?? 1f;
+			float texelW = 1f / Math.Max(1f, w * scale);
+			float texelH = 1f / Math.Max(1f, h * scale);
+
 			if (wprFxaaEffect == null)
 			{
 				wprFxaaEffect = new Effect(this, Resources.FxaaEffect);
-				wprFxaaQuad = new VertexBuffer(this, VertexPositionTexture.VertexDeclaration, 4, BufferUsage.WriteOnly);
-				wprFxaaQuad.SetData(new VertexPositionTexture[]
-				{
-					new VertexPositionTexture(new Vector3(-1f, -1f, 0f), new Vector2(0f, 1f)),
-					new VertexPositionTexture(new Vector3(1f, -1f, 0f), new Vector2(1f, 1f)),
-					new VertexPositionTexture(new Vector3(-1f, 1f, 0f), new Vector2(0f, 0f)),
-					new VertexPositionTexture(new Vector3(1f, 1f, 0f), new Vector2(1f, 0f)),
-				});
+				wprFxaaQuad = new VertexBuffer(this, WprFxaaVertex.Declaration, 4, BufferUsage.WriteOnly);
 				wprFxaaState = Marshal.AllocHGlobal(sizeof(Effect.MOJOSHADER_effectStateChanges));
+				wprFxaaTexelW = 0f;
+			}
+			if (texelW != wprFxaaTexelW || texelH != wprFxaaTexelH)
+			{
+				wprFxaaTexelW = texelW;
+				wprFxaaTexelH = texelH;
+				Vector4 UV(float u, float v) => new Vector4(u, v, texelW, texelH);
+				wprFxaaQuad.SetData(new WprFxaaVertex[]
+				{
+					new WprFxaaVertex { Position = new Vector3(-1f, -1f, 0f), TexCoord = UV(0f, 1f) },
+					new WprFxaaVertex { Position = new Vector3(1f, -1f, 0f), TexCoord = UV(1f, 1f) },
+					new WprFxaaVertex { Position = new Vector3(-1f, 1f, 0f), TexCoord = UV(0f, 0f) },
+					new WprFxaaVertex { Position = new Vector3(1f, 1f, 0f), TexCoord = UV(1f, 0f) },
+				});
 			}
 
 			Viewport = new Viewport(0, 0, w, h);
@@ -1121,8 +1180,27 @@ namespace Microsoft.Xna.Framework.Graphics
 			SetVertexBuffers(new VertexBufferBinding(wprFxaaQuad));
 
 			XnaBackend.Graphics.BeginPassRestore(GLDevice, wprFxaaEffect.glEffect, wprFxaaState);
-			DrawPrimitives(PrimitiveType.TriangleStrip, 0, 2);
-			XnaBackend.Graphics.EndPassRestore(GLDevice, wprFxaaEffect.glEffect);
+			try
+			{
+				DrawPrimitives(PrimitiveType.TriangleStrip, 0, 2);
+			}
+			finally
+			{
+				XnaBackend.Graphics.EndPassRestore(GLDevice, wprFxaaEffect.glEffect);
+			}
+		}
+
+		/// <summary>The redirected, upright backbuffer copied onto the host backbuffer as it is.</summary>
+		private void WprDrawPlainCopy()
+		{
+			int w = PresentationParameters.BackBufferWidth;
+			int h = PresentationParameters.BackBufferHeight;
+			Viewport = new Viewport(0, 0, w, h);
+			ScissorRectangle = new Rectangle(0, 0, w, h);
+			wprTurnBatch ??= new SpriteBatch(this);
+			wprTurnBatch.Begin(SpriteSortMode.Immediate, BlendState.Opaque, SamplerState.LinearClamp, DepthStencilState.None, RasterizerState.CullNone);
+			wprTurnBatch.Draw(wprTurnTarget, new Rectangle(0, 0, w, h), Color.White);
+			wprTurnBatch.End();
 		}
 
 		/// <summary>

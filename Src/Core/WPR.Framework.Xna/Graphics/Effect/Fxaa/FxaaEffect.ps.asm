@@ -1,7 +1,7 @@
 ps_3_0
 ; FXAA (NVIDIA "FXAA 3 console"-style, branch-free), one texture, no constants to set.
-; The texel size comes from the screen-space derivative of the texture coordinate, so the
-; effect needs no parameters: the quad covers the render target 1:1.
+; The texel size arrives in the texcoord's zw (the quad is built per texture), so the effect
+; needs no parameters.
 def c0, 0.299, 0.587, 0.114, 0.0
 def c1, 0.0078125, 0.03125, 8.0, -8.0
 def c2, -0.16666667, 0.16666667, -0.5, 0.5
@@ -9,11 +9,9 @@ def c3, 0.25, 0.0, 0.0, 0.0
 dcl_texcoord0 v0
 dcl_2d s0
 
-; r2.xy = |d uv / d pixel|  (one texel)
-dsx r0, v0
-dsy r1, v0
-mov r2.x, r0_abs.x
-mov r2.y, r1_abs.y
+; r2.xy = one texel in uv units. The vertex shader passes the quad's second texcoord pair
+; through in v0.zw (WprFxaaVertex): derivatives (dsx/dsy) would need an extension on GLSL ES 1.00.
+mov r2.xy, v0.zw
 
 ; corner coordinates: NW r3, NE r4, SW r5, SE r6
 add r3.xy, v0, -r2
